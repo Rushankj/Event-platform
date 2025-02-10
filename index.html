@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Event Management System</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/sql-wasm.js"></script>
+    <style>
+        /* Previous styles remain unchanged */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: Arial, sans-serif;
+        }
+
+        body {
+            background-color: #f5f5f5;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .auth-container, .event-form, .events-list {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+
+        h1, h2 {
+            color: #333;
+            margin-bottom: 20px;
+        }
+
+        input, textarea {
+            width: 100%;
+            padding: 8px;
+            margin-bottom: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+
+        button {
+            background-color: #4CAF50;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-right: 10px;
+        }
+
+        button:hover {
+            background-color: #45a049;
+        }
+
+        .event-card {
+            background: #fff;
+            padding: 15px;
+            margin-bottom: 10px;
+            border-radius: 4px;
+            border: 1px solid #ddd;
+        }
+
+        .event-actions {
+            margin-top: 10px;
+        }
+
+        .delete-btn {
+            background-color: #f44336;
+        }
+
+        .edit-btn {
+            background-color: #2196F3;
+        }
+
+        .hidden {
+            display: none;
+        }
+
+        #logoutBtn {
+            background-color: #666;
+            float: right;
+        }
+
+        /* New style for save events button */
+        .save-events-btn {
+            background-color: #ff9800;
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Authentication Section -->
+        <div id="authSection" class="auth-container">
+            <h2>Login / Register</h2>
+            <input type="text" id="username" placeholder="Username" required>
+            <input type="password" id="password" placeholder="Password" required>
+            <button onclick="login()">Login</button>
+            <button onclick="register()">Register</button>
+        </div>
+
+        <!-- Event Management Section -->
+        <div id="eventSection" class="hidden">
+            <button id="logoutBtn" onclick="logout()">Logout</button>
+            <h1>Event Management System</h1>
+            
+            <!-- Event Form -->
+            <div class="event-form">
+                <h2>Add/Edit Event</h2>
+                <input type="hidden" id="eventId">
+                <input type="text" id="eventTitle" placeholder="Event Title" required>
+                <textarea id="eventDescription" placeholder="Event Description" required></textarea>
+                <input type="datetime-local" id="eventDateTime" required>
+                <input type="text" id="eventLocation" placeholder="Event Location" required>
+                <button onclick="saveEvent()">Save Event</button>
+                <button onclick="clearForm()">Clear Form</button>
+            </div>
+
+            <!-- Save Events Button -->
+            <button class="save-events-btn" onclick="saveEventsToJson()">Save Events to File</button>
+
+            <!-- Events List -->
+            <div class="events-list">
+                <h2>Your Events</h2>
+                <div id="eventsList"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Previous code remains unchanged
+        let db;
+        let currentUser = null;
+
+        // Initialize SQLite database
+        initDB();
+
+        async function initDB() {
+            const SQL = await initSqlJs({
+                locateFile: file => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.8.0/${file}`
+            });
+            db = new SQL.Database();
+            
+            // Create tables
+            db.run(`
+                CREATE TABLE IF NOT EXISTS users (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    username TEXT UNIQUE,
+                    password TEXT
+                )
+            `);
+
+            db.run(`
+                CREATE TABLE IF NOT EXISTS events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER,
+                    title TEXT,
+                    description TEXT,
+                    datetime TEXT,
+                    location TEXT,
+                    FOREIGN KEY(user_id) REFERENCES users(id)
+                )
+            `);
+        }
+
+        // Authentication functions
+        function register() {
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+
+            if (!username || !password) {
+                alert('Please fill in all fields');
+                return;
+            }
+
+            try {
+                db.run('INSERT INTO users (username, password) VALUES (?, ?)', [username, password]);
+                alert('Registration successful! Please login.');
+            } catch (error) {
+                alert('Username already exists!');
+            }
+        }
+
+        function login() {
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+
+            const result = db.exec(`
+                SELECT * FROM users 
+                WHERE username = '${username}' 
+                AND password = '${password}'
+            `);
+
+            if (result.length > 0) {
+                currentUser = {
+                    id: result[0].values[0][0],
+                    username: username
+                };
+                document.getElementById('authSection').classList.add('hidden');
+                document.getElementById('eventSection').classList.remove('hidden');
+                loadEvents();
+            } else {
+                alert('Invalid credentials!');
+            }
+        }
+
+        function logout() {
+            currentUser = null;
+            document.getElementById('authSection').classList.remove('hidden');
+            document.getElementById('eventSection').classList.add('hidden');
+            clearForm();
+        }
+
+        // Event management functions
+        function saveEvent() {
+            const eventId = document.getElementById('eventId').value;
+            const title = document.getElementById('eventTitle').value;
+            const description = document.getElementById('eventDescription').value;
+            const datetime = document.getElementById('eventDateTime').value;
+            const location = document.getElementById('eventLocation').value;
+
+            if (!title || !description || !datetime || !location) {
+                alert('Please fill in all fields');
+                return;
+            }
+
+            if (eventId) {
+                // Update existing event
+                db.run(`
+                    UPDATE events 
+                    SET title = ?, description = ?, datetime = ?, location = ? 
+                    WHERE id = ? AND user_id = ?
+                `, [title, description, datetime, location, eventId, currentUser.id]);
+            } else {
+                // Create new event
+                db.run(`
+                    INSERT INTO events (user_id, title, description, datetime, location)
+                    VALUES (?, ?, ?, ?, ?)
+                `, [currentUser.id, title, description, datetime, location]);
+            }
+
+            clearForm();
+            loadEvents();
+        }
+
+        function loadEvents() {
+            const result = db.exec(`
+                SELECT * FROM events 
+                WHERE user_id = ${currentUser.id}
+                ORDER BY datetime DESC
+            `);
+
+            const eventsContainer = document.getElementById('eventsList');
+            eventsContainer.innerHTML = '';
+
+            if (result.length > 0) {
+                result[0].values.forEach(event => {
+                    const eventCard = document.createElement('div');
+                    eventCard.className = 'event-card';
+                    eventCard.innerHTML = `
+                        <h3>${event[2]}</h3>
+                        <p>${event[3]}</p>
+                        <p><strong>Date/Time:</strong> ${new Date(event[4]).toLocaleString()}</p>
+                        <p><strong>Location:</strong> ${event[5]}</p>
+                        <div class="event-actions">
+                            <button class="edit-btn" onclick="editEvent(${event[0]})">Edit</button>
+                            <button class="delete-btn" onclick="deleteEvent(${event[0]})">Delete</button>
+                        </div>
+                    `;
+                    eventsContainer.appendChild(eventCard);
+                });
+            } else {
+                eventsContainer.innerHTML = '<p>No events found.</p>';
+            }
+        }
+
+        function editEvent(eventId) {
+            const result = db.exec(`
+                SELECT * FROM events 
+                WHERE id = ${eventId} AND user_id = ${currentUser.id}
+            `);
+
+            if (result.length > 0) {
+                const event = result[0].values[0];
+                document.getElementById('eventId').value = event[0];
+                document.getElementById('eventTitle').value = event[2];
+                document.getElementById('eventDescription').value = event[3];
+                document.getElementById('eventDateTime').value = event[4].replace(' ', 'T');
+                document.getElementById('eventLocation').value = event[5];
+            }
+        }
+
+        function deleteEvent(eventId) {
+            if (confirm('Are you sure you want to delete this event?')) {
+                db.run(`
+                    DELETE FROM events 
+                    WHERE id = ? AND user_id = ?
+                `, [eventId, currentUser.id]);
+                loadEvents();
+            }
+        }
+
+        function clearForm() {
+            document.getElementById('eventId').value = '';
+            document.getElementById('eventTitle').value = '';
+            document.getElementById('eventDescription').value = '';
+            document.getElementById('eventDateTime').value = '';
+            document.getElementById('eventLocation').value = '';
+        }
+
+        // New function to save events to JSON file
+        function saveEventsToJson() {
+            if (!currentUser) {
+                alert('Please login first');
+                return;
+            }
+
+            const result = db.exec(`
+                SELECT * FROM events 
+                WHERE user_id = ${currentUser.id}
+                ORDER BY datetime DESC
+            `);
+
+            if (result.length > 0) {
+                const events = result[0].values.map(event => ({
+                    id: event[0],
+                    user_id: event[1],
+                    title: event[2],
+                    description: event[3],
+                    datetime: event[4],
+                    location: event[5]
+                }));
+
+                const jsonData = JSON.stringify(events, null, 2);
+                const blob = new Blob([jsonData], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                
+                const link = document.createElement('a');
+                link.href = url;
+                link.download = `events_${currentUser.username}_${new Date().toISOString().split('T')[0]}.json`;
+                
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                URL.revokeObjectURL(url);
+            } else {
+                alert('No events to save');
+            }
+        }
+    </script>
+</body>
+</html>
